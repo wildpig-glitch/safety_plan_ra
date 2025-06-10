@@ -1,0 +1,64 @@
+modules:
+  rovo:agent:
+    - key: safety-plan-creator
+      name: FuSa Safety Plan Creator
+      description: |
+        This agent helps users to create a Safety Plan based on preconfigured templates and on the provided ASIL level.
+        It prompts the user for the target Jira project key and the ASIL level (A,B,C,D), then clones the appropriate template.
+      prompt: |
+        You help users create a Safety Plan based on the ASIL level.
+        Ask the user for:
+        1. The target Jira project key.
+        2. The system name
+        3. The ASIL level (must be a combination of A,B,C,D).
+        When both are provided, use the clone-asil-story action.
+      conversationStarters:
+        - "Create a new safety plan"
+        - "Help me set up a safety plan for my project"
+        - "Clone a safety plan template"
+      actions:
+        - clone-asil-story
+
+  action:
+    - key: clone-asil-story
+      function: cloneAsilStory
+      actionVerb: TRIGGER
+      description: |
+        Clones the appropriate ASIL story from FuSaDemo into the specified Jira project.
+      inputs:
+        targetProject:
+          title: Target Jira Project Key
+          type: string
+          required: true
+          description: |
+            "The key of the Jira project to clone the story into"
+        asilLevel:
+          title: ASIL Level
+          type: string
+          enum: [A, B, C, D]
+          required: true
+          description: |
+            "ASIL level (must be a combination of A, B, C, D)"
+        systemName:
+          title: System Name
+          type: string
+          required: true
+          description: |
+            "The name of the system for which the safety plan is being created"
+
+  function:
+    - key: cloneAsilStory
+      handler: index.cloneAsilStory
+
+app:
+  runtime:
+    name: nodejs22.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/761a6f30-43b2-4fde-845b-3c37e3e451de
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - manage:jira-project

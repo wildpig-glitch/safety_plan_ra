@@ -1,0 +1,187 @@
+import api, { route } from '@forge/api';
+
+/**
+ * Clones an ASIL story (and its sub-tasks) from FuSaDemo into the target project using only public Jira REST APIs.
+ * @param {object} params
+ * @param {string} params.targetProject - The key of the target Jira project
+ * @param {string} params.asilLevel - The ASIL level (A, B, C, or D)
+ * @param {string} params.systemName - The name of the system
+ */
+
+// global parameters
+const sourceEpicKey = 'FUS-8'; // Replace with the actual issue key for the ASIL story in FuSaDemo
+const sourceProjectKey = 'FUS'; // The project key where the source issue is located
+const asilCustomFieldId = 'customfield_10091'; // Replace with the actual custom field ID for ASIL level
+const issueTypeCache = new Map();
+
+// Helper: Get valid issue types for a project
+async function getProjectIssueTypes(projectKey) {
+  const res = await api.asApp().requestJira(
+    route`/rest/api/3/project/${projectKey}`
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch project info: ${res.status} ${await res.text()}`);
+  }
+  const project = await res.json();
+  return project.issueTypes; // Array of {id, name, ...}
+}
+
+// Helper: Find issue type ID by name in a project
+async function getIssueTypeIdByName(projectKey, issueTypeName) {
+    const cacheKey = `${projectKey}-${issueTypeName}`;
+    if (issueTypeCache.has(cacheKey)) {
+        return issueTypeCache.get(cacheKey);
+    }
+    const issueTypes = await getProjectIssueTypes(projectKey);
+    const found = issueTypes.find(type => type.name === issueTypeName);
+    if (!found) {
+        throw new Error(`Issue type "${issueTypeName}" not found in project "${projectKey}"`);
+    }
+    issueTypeCache.set(cacheKey, found.id);
+    return found.id;
+}
+
+// Returns the issue key for the given ASIL level (A, B, C, D) in the FuSaDemo project
+async function getIssueKeyByAsilLevel(asilLevel) {
+  let jql = `project = ${sourceProjectKey}` ;
+
+ if (asilLevel.length > 0) {
+    // Add conditions for included ASIL levels
+    asilLevel.forEach(item => {
+        jql += ` AND ASIL_Level = ${item}`;
+    });
+    // Add conditions to exclude other ASIL levels
+    const allAsilLevels = ['A', 'B', 'C', 'D'];
+    const excludedLevels = allAsilLevels.filter(level => !asilLevel.includes(level));
+    excludedLevels.forEach(item => {
+        jql += ` AND ASIL_Level != ${item}`;
+    });
+}
+
+  console.log(`Searching for work items with ASIL level ${asilLevel.join(", ")} with JQL: ${jql}`);
+
+  const res = await api.asApp().requestJira(
+    route`/rest/api/3/search`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jql,
+        fields: ['key', 'summary', 'description'],
+        //maxResults: 200
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Failed to search for ASIL level ${asilLevel.join(", ")}: ${res.status} ${await res.text()}`);
+  }
+  const data = await res.json();
+  if (!data.issues || data.issues.length === 0) {
+    throw new Error(`No issue found for ASIL level ${asilLevel.join(", ")}`);
+  }
+  console.log(`Found issues for ASIL level ${asilLevel.join(", ")}: ${data.issues.map(issue => issue.key).join(", ")}`);
+  return data.issues;
+}
+
+export async function cloneAsilStory(params) {
+  const { targetProject, asilLevel, systemName } = params;
+  console.log(`Cloning ASIL story for project ${targetProject} with ASIL level ${asilLevel} for system ${systemName}`);
+  const asilLevelList = [...new Set(  // Remove duplicates
+    asilLevel
+        .replace(/[\s,]/g, '')  // Remove all spaces and commas
+        .split('')              // Split into individual characters
+        .filter(item => item.length > 0)  // Remove empty strings
+  )].sort();  // Sort alphabetically
+  if (asilLevelList.length === 0 || asilLevelList.some(item => !["A", "B", "C", "D"].includes(item))) {
+    throw new Error('ASIL level must be a combination of A, B, C, or D.');
+  }
+
+  console.log(`Target project: ${targetProject}, ASIL level: ${asilLevelList.join(", ")}, System name: ${systemName}`);
+
+
+  // Fetch source issue (with subtasks)
+  const sourceIssueRes = await api.asApp().requestJira(
+    route`/rest/api/3/issue/${sourceEpicKey}?expand=names`
+  );
+  if (!sourceIssueRes.ok) {
+    throw new Error(`Failed to fetch source issue: ${sourceIssueRes.status} ${await sourceIssueRes.text()}`);
+  }
+  const sourceIssue = await sourceIssueRes.json();
+
+  // Map issue type name to ID in target project
+  const issueTypeName = sourceIssue.fields.issuetype.name;
+  const targetIssueTypeId = await getIssueTypeIdByName(targetProject, issueTypeName);
+
+  // Create parent issue in target project
+  const parentFields = {
+    project: { key: targetProject },
+    summary: `System ${systemName} Safety Plan`,
+    issuetype: { id: targetIssueTypeId },
+    description: sourceIssue.fields.description,
+    // Add more fields as needed
+  };
+    //console.log(`Parent issue fields: ${JSON.stringify(parentFields)}`);
+
+  const createParentRes = await api.asApp().requestJira(
+    route`/rest/api/3/issue`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: parentFields }),
+    }
+  );
+  if (!createParentRes.ok) {
+    throw new Error(`Failed to create parent issue: ${createParentRes.status} ${await createParentRes.text()}`);
+  }
+  const newParent = await createParentRes.json();
+  const newParentKey = newParent.key;
+
+  // Clone each subtask
+  //const subtasks = sourceIssue.fields.subtasks || [];
+  const subtasks = await getIssueKeyByAsilLevel(asilLevelList);
+  for (const subtask of subtasks) {
+    // Fetch subtask details
+    const subtaskRes = await api.asApp().requestJira(
+      route`/rest/api/3/issue/${subtask.key}?expand=names`
+    );
+    if (!subtaskRes.ok) {
+      throw new Error(`Failed to fetch subtask ${subtask.key}: ${subtaskRes.status} ${await subtaskRes.text()}`);
+    }
+    const subtaskData = await subtaskRes.json();
+
+    // Map subtask issue type name to ID in target project
+    const subtaskTypeName = subtaskData.fields.issuetype.name;
+    const targetSubtaskTypeId = await getIssueTypeIdByName(targetProject, subtaskTypeName);
+
+    // Prepare subtask fields
+    const subtaskFields = {
+      project: { key: targetProject },
+      summary: `${subtaskData.fields.summary}`,
+      issuetype: { id: targetSubtaskTypeId },
+      parent: { key: newParentKey },
+      description: subtaskData.fields.description,
+      [asilCustomFieldId]: asilLevelList.map(val => ({ value: val })), // Custom field for ASIL level
+      // Add more fields as needed
+    };
+    console.log(`Subtask fields for ${subtask.key}: ${JSON.stringify(subtaskFields)}`);
+
+    // Create subtask in target project
+    const createSubtaskRes = await api.asApp().requestJira(
+      route`/rest/api/3/issue`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: subtaskFields }),
+      }
+    );
+    if (!createSubtaskRes.ok) {
+      throw new Error(`Failed to create subtask: ${createSubtaskRes.status} ${await createSubtaskRes.text()}`);
+    }
+  }
+
+  return {
+    message: `Safety Plan Template ${sourceEpicKey} cloned and moved to project ${targetProject} successfully with sub-elements.`,
+    newIssueKey: newParentKey
+  };
+}
