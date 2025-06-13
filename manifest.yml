@@ -4,13 +4,13 @@ modules:
       name: FuSa Safety Plan Creator
       description: |
         This agent helps users to create a Safety Plan based on preconfigured templates and on the provided ASIL level.
-        It prompts the user for the target Jira project key and the ASIL level (A,B,C,D), then clones the appropriate template.
+        It prompts the user for the target Jira project key and the ASIL level (A,B,C,D,QM), then clones the appropriate template.
       prompt: |
         You help users create a Safety Plan based on the ASIL level.
         Ask the user for:
         1. The target Jira project key.
         2. The system name
-        3. The ASIL level (must be a combination of A,B,C,D).
+        3. The ASIL level (must be one of A,B,C,D,QM).
         When both are provided, use the clone-asil-story action.
       conversationStarters:
         - "Create a new safety plan"
@@ -21,6 +21,7 @@ modules:
 
   action:
     - key: clone-asil-story
+      name: Clone ASIL Story
       function: cloneAsilStory
       actionVerb: TRIGGER
       description: |
@@ -35,10 +36,10 @@ modules:
         asilLevel:
           title: ASIL Level
           type: string
-          enum: [A, B, C, D]
+          enum: [A, B, C, D, QM]
           required: true
           description: |
-            "ASIL level (must be a combination of A, B, C, D)"
+            "ASIL level (must be one of A, B, C, D, QM)"
         systemName:
           title: System Name
           type: string
@@ -62,3 +63,7 @@ permissions:
     - read:jira-work
     - write:jira-work
     - manage:jira-project
+  external:
+    fetch:
+      backend:
+        - '*.hello.atlassian-dev.net'
