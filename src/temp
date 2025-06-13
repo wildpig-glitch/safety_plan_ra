@@ -1,0 +1,21 @@
+
+/**
+ * Clones an ASIL story (and its sub-tasks) from FuSaDemo into the target project using only public Jira REST APIs.
+ * @param {object} params
+ * @param {string} params.targetProject - The key of the target Jira project
+ * @param {string} params.asilLevel - The ASIL level (A, B, C, or D)
+ * @param {string} params.systemName - The name of the system
+ */
+
+permissions:
+  external:
+    fetch:
+      backend:
+        - 'https://32dbd006-4951-4027-84a9-0c75cb8c661c.hello.atlassian-dev.net'
+
+
+permissions:
+  external:
+    fetch:
+      backend:
+        - '*.hello.atlassian-dev.net'

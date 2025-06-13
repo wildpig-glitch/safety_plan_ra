@@ -1,5 +1,4 @@
 import api, { route } from '@forge/api';
-
 /**
  * Clones an ASIL story (and its sub-tasks) from FuSaDemo into the target project using only public Jira REST APIs.
  * @param {object} params
@@ -9,169 +8,11 @@ import api, { route } from '@forge/api';
  */
 
 // global parameters
-const sourceEpicKey = 'FUS-8'; // Replace with the actual issue key for the ASIL story in FuSaDemo
-const sourceProjectKey = 'FUS'; // The project key where the source issue is located
-const asilCustomFieldId = 'customfield_10091'; // Replace with the actual custom field ID for ASIL level
-const issueTypeCache = new Map();
-const projectCache = new Map(); // Cache for project info
+const webTriggerUrl = "https://32dbd006-4951-4027-84a9-0c75cb8c661c.hello.atlassian-dev.net/x1/vrLmIUVdd95DoGLK1WJoiuRZqBY";
 
-// Helper: Get valid issue types for a project (with caching)
-async function getProjectIssueTypes(projectKey) {
-  if (projectCache.has(projectKey)) {
-    return projectCache.get(projectKey);
-  }
-  
-  const res = await api.asApp().requestJira(
-    route`/rest/api/3/project/${projectKey}`
-  );
-  if (!res.ok) {
-    throw new Error(`Failed to fetch project info: ${res.status} ${await res.text()}`);
-  }
-  const project = await res.json();
-  projectCache.set(projectKey, project.issueTypes);
-  return project.issueTypes; // Array of {id, name, ...}
-}
-
-// Helper: Find issue type ID by name in a project
-async function getIssueTypeIdByName(projectKey, issueTypeName) {
-  const cacheKey = `${projectKey}-${issueTypeName}`;
-  if (issueTypeCache.has(cacheKey)) {
-    return issueTypeCache.get(cacheKey);
-  }
-  const issueTypes = await getProjectIssueTypes(projectKey);
-  const found = issueTypes.find(type => type.name === issueTypeName);
-  if (!found) {
-    throw new Error(`Issue type "${issueTypeName}" not found in project "${projectKey}"`);
-  }
-  issueTypeCache.set(cacheKey, found.id);
-  return found.id;
-}
-
-// Batch fetch multiple issues with expand to get all details at once
-async function fetchIssuesWithDetails(issueKeys) {
-  if (issueKeys.length === 0) return [];
-  
-  // Jira REST API supports fetching multiple issues in one call
-  const jql = `key in (${issueKeys.map(key => `"${key}"`).join(',')})`;
-  
-  const res = await api.asApp().requestJira(
-    route`/rest/api/3/search`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jql,
-        fields: ['key', 'summary', 'description', 'issuetype'],
-        expand: ['names'],
-        maxResults: 1000 // Adjust based on your needs
-      }),
-    }
-  );
-  
-  if (!res.ok) {
-    throw new Error(`Failed to fetch issues: ${res.status} ${await res.text()}`);
-  }
-  
-  const data = await res.json();
-  return data.issues || [];
-}
-
-// Returns the issue key for the given ASIL level (A, B, C, D) in the FuSaDemo project
-async function getIssueKeyByAsilLevel(asilLevel) {
-  let jql = `project = ${sourceProjectKey}`;
-
-  if (asilLevel.length > 0) {
-    // Add conditions for included ASIL levels
-    asilLevel.forEach(item => {
-      jql += ` AND ASIL_Level = ${item}`;
-    });
-    // Add conditions to exclude other ASIL levels
-    const allAsilLevels = ['A', 'B', 'C', 'D'];
-    const excludedLevels = allAsilLevels.filter(level => !asilLevel.includes(level));
-    excludedLevels.forEach(item => {
-      jql += ` AND ASIL_Level != ${item}`;
-    });
-  }
-
-  console.log(`Searching for work items with ASIL level ${asilLevel.join(", ")} with JQL: ${jql}`);
-
-  const res = await api.asApp().requestJira(
-    route`/rest/api/3/search`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jql,
-        fields: ['key', 'summary', 'description', 'issuetype'],
-        expand: ['names'],
-        maxResults: 1000
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error(`Failed to search for ASIL level ${asilLevel.join(", ")}: ${res.status} ${await res.text()}`);
-  }
-  const data = await res.json();
-  if (!data.issues || data.issues.length === 0) {
-    throw new Error(`No issue found for ASIL level ${asilLevel.join(", ")}`);
-  }
-  console.log(`Found issues for ASIL level ${asilLevel.join(", ")}: ${data.issues.map(issue => issue.key).join(", ")}`);
-  return data.issues;
-}
-
-// Batch create issues using Promise.all for parallel execution
-async function createIssuesBatch(issuePayloads) {
-  const createPromises = issuePayloads.map(payload => 
-    api.asApp().requestJira(
-      route`/rest/api/3/issue`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: payload }),
-      }
-    )
-  );
-  
-  const results = await Promise.allSettled(createPromises);
-  const successful = [];
-  const failed = [];
-  
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status === 'fulfilled' && result.value.ok) {
-      const createdIssue = await result.value.json();
-      successful.push(createdIssue);
-    } else {
-      const error = result.status === 'rejected' 
-        ? result.reason 
-        : `HTTP ${result.value.status}: ${await result.value.text()}`;
-      failed.push({ payload: issuePayloads[i], error });
-    }
-  }
-  
-  return { successful, failed };
-}
-
-// Pre-fetch and cache issue type mappings for both projects
-async function preloadIssueTypeMappings(sourceProject, targetProject, issueTypeNames) {
-  const promises = [];
-  
-  // Load issue types for both projects in parallel
-  promises.push(getProjectIssueTypes(sourceProject));
-  promises.push(getProjectIssueTypes(targetProject));
-  
-  await Promise.all(promises);
-  
-  // Pre-cache issue type ID mappings for target project
-  const targetMappingPromises = issueTypeNames.map(typeName => 
-    getIssueTypeIdByName(targetProject, typeName)
-  );
-  
-  await Promise.all(targetMappingPromises);
-}
 
 export async function cloneAsilStory(params) {
+  console.log(`Starting ASIL story cloning with params: ${JSON.stringify(params)}`);
   const { targetProject, asilLevel, systemName } = params;
   console.log(`Cloning ASIL story for project ${targetProject} with ASIL level ${asilLevel} for system ${systemName}`);
   
@@ -188,83 +29,22 @@ export async function cloneAsilStory(params) {
 
   console.log(`Target project: ${targetProject}, ASIL level: ${asilLevelList.join(", ")}, System name: ${systemName}`);
 
-  // Fetch source issue and subtasks in parallel
-  const [sourceIssueRes, subtasks] = await Promise.all([
-    api.asApp().requestJira(route`/rest/api/3/issue/${sourceEpicKey}?expand=names`),
-    getIssueKeyByAsilLevel(asilLevelList)
-  ]);
-  
-  if (!sourceIssueRes.ok) {
-    throw new Error(`Failed to fetch source issue: ${sourceIssueRes.status} ${await sourceIssueRes.text()}`);
-  }
-  const sourceIssue = await sourceIssueRes.json();
-
-  // Pre-load issue type mappings for better performance
-  const allIssueTypeNames = [
-    sourceIssue.fields.issuetype.name,
-    ...subtasks.map(subtask => subtask.fields.issuetype.name)
-  ];
-  const uniqueIssueTypeNames = [...new Set(allIssueTypeNames)];
-  
-  await preloadIssueTypeMappings(sourceProjectKey, targetProject, uniqueIssueTypeNames);
-
-  // Create parent issue
-  const issueTypeName = sourceIssue.fields.issuetype.name;
-  const targetIssueTypeId = await getIssueTypeIdByName(targetProject, issueTypeName);
-
-  const parentFields = {
-    project: { key: targetProject },
-    summary: `System ${systemName} Safety Plan`,
-    issuetype: { id: targetIssueTypeId },
-    description: sourceIssue.fields.description,
+  const payload = {
+    targetProject,
+    asilLevel: asilLevelList.join(", "),
+    systemName
   };
-
-  const createParentRes = await api.asApp().requestJira(
-    route`/rest/api/3/issue`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields: parentFields }),
-    }
-  );
-  
-  if (!createParentRes.ok) {
-    throw new Error(`Failed to create parent issue: ${createParentRes.status} ${await createParentRes.text()}`);
+  const response = await fetch(webTriggerUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(`Web trigger call failed: ${response.status} ${await response.text()}`);
   }
-  const newParent = await createParentRes.json();
-  const newParentKey = newParent.key;
-
-  // Prepare all subtask payloads for batch creation
-  const subtaskPayloads = await Promise.all(
-    subtasks.map(async (subtask) => {
-      const subtaskTypeName = subtask.fields.issuetype.name;
-      const targetSubtaskTypeId = await getIssueTypeIdByName(targetProject, subtaskTypeName);
-
-      return {
-        project: { key: targetProject },
-        summary: `${subtask.fields.summary}`,
-        issuetype: { id: targetSubtaskTypeId },
-        parent: { key: newParentKey },
-        description: subtask.fields.description,
-        [asilCustomFieldId]: asilLevelList.map(val => ({ value: val })),
-      };
-    })
-  );
-
-  // Create all subtasks in parallel
-  console.log(`Creating ${subtaskPayloads.length} subtasks in parallel...`);
-  const { successful, failed } = await createIssuesBatch(subtaskPayloads);
-
-  console.log(`Successfully created ${successful.length} subtasks`);
-  if (failed.length > 0) {
-    console.warn(`Failed to create ${failed.length} subtasks:`, failed);
-    // You might want to retry failed creations or handle them differently
-  }
-
-  return {
-    message: `Safety Plan Template ${sourceEpicKey} cloned and moved to project ${targetProject} successfully with ${successful.length} sub-elements.`,
-    newIssueKey: newParentKey,
-    createdSubtasks: successful.length,
-    failedSubtasks: failed.length
-  };
+  const result = await response.json();
+  console.log(`Web trigger response: ${JSON.stringify(result)}`);
+  return result;
 }
