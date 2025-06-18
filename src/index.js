@@ -5,6 +5,7 @@ import api, { route } from '@forge/api';
  * @param {string} params.targetProject - The key of the target Jira project
  * @param {string} params.asilLevel - The ASIL level (A, B, C, or D)
  * @param {string} params.systemName - The name of the system
+ * @param {string} params.carline - The name of the carline
  */
 
 // global parameters
@@ -13,26 +14,52 @@ const webTriggerUrl = "https://32dbd006-4951-4027-84a9-0c75cb8c661c.hello.atlass
 
 export async function cloneAsilStory(params) {
   console.log(`Starting ASIL story cloning with params: ${JSON.stringify(params)}`);
-  const { targetProject, asilLevel, systemName } = params;
-  console.log(`Cloning ASIL story for project ${targetProject} with ASIL level ${asilLevel} for system ${systemName}`);
-  
-  const asilLevelList = [...new Set(  // Remove duplicates
-    asilLevel
-      .replace(/[\s,]/g, '')  // Remove all spaces and commas
-      .split('')              // Split into individual characters
-      .filter(item => item.length > 0)  // Remove empty strings
-  )].sort();  // Sort alphabetically
-  
-  if (asilLevelList.length === 0 || asilLevelList.some(item => !["A", "B", "C", "D"].includes(item))) {
-    throw new Error('ASIL level must be a combination of A, B, C, or D.');
-  }
+  const { targetProject, asilLevel, systemName, carline } = params;
+  console.log(`Cloning ASIL story for project ${targetProject} with ASIL level ${asilLevel} for system ${systemName} and carline ${carline}`);
 
-  console.log(`Target project: ${targetProject}, ASIL level: ${asilLevelList.join(", ")}, System name: ${systemName}`);
+  const validLevels = ['A', 'B', 'C', 'D', 'QM'];
+  const isValid = validLevels.includes(asilLevel);
+
+  if (!isValid) {
+    throw new Error('ASIL level must be one of A, B, C, D, or QM.');
+  }
+  const action = 'cloneAsilStory';
+  console.log(`Action: ${action}`);
+  console.log(`Target project: ${targetProject}, ASIL level: ${asilLevel}, System name: ${systemName}`);
 
   const payload = {
+    action,
     targetProject,
-    asilLevel: asilLevelList.join(", "),
-    systemName
+    asilLevel,
+    systemName,
+    carline
+  };
+  const response = await fetch(webTriggerUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    throw new Error(`Web trigger call failed: ${response.status} ${await response.text()}`);
+  }
+  const result = await response.json();
+  console.log(`Web trigger response: ${JSON.stringify(result)}`);
+  return result;
+}
+
+export async function takeoverAsilStory(params) {
+  console.log(`Starting ASIL story takeover with params: ${JSON.stringify(params)}`);
+  const { carline, epicIssueKey } = params;
+  const action = 'takeoverAsilStory';
+  console.log(`Action: ${action}`);
+  console.log(`Taking over ASIL story for carline ${carline} with epic issue key ${epicIssueKey}`);
+
+  const payload = {
+    action,
+    carline,
+    epicIssueKey
   };
   const response = await fetch(webTriggerUrl, {
     method: 'POST',
